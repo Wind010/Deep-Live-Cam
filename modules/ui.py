@@ -341,24 +341,42 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     camera_label = ctk.CTkLabel(root, text=_("Select Camera:"))
     camera_label.place(relx=0.1, rely=0.92, relwidth=0.2, relheight=0.05)
 
-    available_cameras = get_available_cameras()
-    camera_indices, camera_names = available_cameras
-
-    if not camera_names or camera_names[0] == "No cameras found":
-        camera_variable = ctk.StringVar(value="No cameras found")
-        camera_optionmenu = ctk.CTkOptionMenu(
-            root,
-            variable=camera_variable,
-            values=["No cameras found"],
-            state="disabled",
-        )
-    else:
-        camera_variable = ctk.StringVar(value=camera_names[0])
-        camera_optionmenu = ctk.CTkOptionMenu(
-            root, variable=camera_variable, values=camera_names
-        )
+    # Lazy-load cameras to avoid GIL crash on macOS during authorization
+    camera_indices = []
+    camera_names = []
+    camera_variable = ctk.StringVar(value="Click to refresh cameras")
+    camera_optionmenu = ctk.CTkOptionMenu(
+        root,
+        variable=camera_variable,
+        values=["Click to refresh cameras"],
+    )
 
     camera_optionmenu.place(relx=0.35, rely=0.92, relwidth=0.25, relheight=0.05)
+
+    def refresh_cameras():
+        nonlocal camera_indices, camera_names
+        available_cameras = get_available_cameras()
+        camera_indices, camera_names = available_cameras
+        
+        if not camera_names or camera_names[0] == "No cameras found":
+            camera_optionmenu.configure(values=["No cameras found"], state="disabled")
+            camera_variable.set("No cameras found")
+            live_button.configure(state="disabled")
+        else:
+            camera_optionmenu.configure(values=camera_names, state="normal")
+            camera_variable.set(camera_names[0])
+            live_button.configure(state="normal")
+        
+        update_status("Cameras refreshed")
+
+    refresh_camera_button = ctk.CTkButton(
+        root,
+        text=_("↻"),
+        cursor="hand2",
+        command=refresh_cameras,
+        width=30,
+    )
+    refresh_camera_button.place(relx=0.605, rely=0.92, relwidth=0.04, relheight=0.05)
 
     live_button = ctk.CTkButton(
         root,
@@ -372,11 +390,7 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
                 else None
             ),
         ),
-        state=(
-            "normal"
-            if camera_names and camera_names[0] != "No cameras found"
-            else "disabled"
-        ),
+        state="disabled",
     )
     live_button.place(relx=0.65, rely=0.92, relwidth=0.2, relheight=0.05)
     # --- End Camera Selection ---
@@ -895,10 +909,13 @@ def get_available_cameras():
                 working_cameras = []
 
                 for idx in test_indices:
-                    cap = cv2.VideoCapture(idx)
-                    if cap.isOpened():
-                        working_cameras.append(f"Camera {idx}")
-                        cap.release()
+                    try:
+                        cap = cv2.VideoCapture(idx)
+                        if cap.isOpened():
+                            working_cameras.append(f"Camera {idx}")
+                            cap.release()
+                    except Exception:
+                        pass
 
                 if working_cameras:
                     return test_indices[: len(working_cameras)], working_cameras
@@ -918,28 +935,29 @@ def get_available_cameras():
         camera_names = []
 
         if platform.system() == "Darwin":  # macOS specific handling
-            # Try to open the default FaceTime camera first
-            cap = cv2.VideoCapture(0)
-            if cap.isOpened():
-                camera_indices.append(0)
-                camera_names.append("FaceTime Camera")
-                cap.release()
-
-            # On macOS, additional cameras typically use indices 1 and 2
-            for i in [1, 2]:
-                cap = cv2.VideoCapture(i)
-                if cap.isOpened():
-                    camera_indices.append(i)
-                    camera_names.append(f"Camera {i}")
-                    cap.release()
+            # On macOS, don't probe cameras during detection to avoid permission spam
+            # Just provide default indices - they will be validated when actually used
+            print("\nDetecting cameras on macOS...")
+            print("Note: Camera access requires permission in System Settings.")
+            
+            # Return common camera indices without probing
+            # User will get clear error message when they try to use it
+            camera_indices = [0, 1]
+            camera_names = ["Default Camera (0)", "Camera 1"]
+            
+            print(f"Found {len(camera_indices)} potential camera indices.")
+            print("Camera will be validated when you start the live preview.\n")
         else:
             # Linux camera detection - test first 10 indices
             for i in range(10):
-                cap = cv2.VideoCapture(i)
-                if cap.isOpened():
-                    camera_indices.append(i)
-                    camera_names.append(f"Camera {i}")
-                    cap.release()
+                try:
+                    cap = cv2.VideoCapture(i)
+                    if cap.isOpened():
+                        camera_indices.append(i)
+                        camera_names.append(f"Camera {i}")
+                        cap.release()
+                except Exception:
+                    pass
 
         if not camera_names:
             return [], ["No cameras found"]

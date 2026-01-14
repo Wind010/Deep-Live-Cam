@@ -3,6 +3,8 @@ import numpy as np
 from typing import Optional, Tuple, Callable
 import platform
 import threading
+import sys
+import subprocess
 
 # Only import Windows-specific library if on Windows
 if platform.system() == "Windows":
@@ -31,6 +33,26 @@ class VideoCapturer:
     def start(self, width: int = 960, height: int = 540, fps: int = 60) -> bool:
         """Initialize and start video capture"""
         try:
+            # Handle macOS camera permissions
+            if platform.system() == "Darwin":
+                if not self._check_macos_camera_permission():
+                    print("\n" + "="*70)
+                    print("CAMERA PERMISSION REQUIRED")
+                    print("="*70)
+                    print("\nOpenCV needs camera access but doesn't have permission.")
+                    print("\nTo fix this issue:")
+                    print("\n1. Go to System Settings > Privacy & Security > Camera")
+                    print("2. Enable camera access for your Terminal app")
+                    print("   (e.g., Terminal.app, iTerm.app, or your Python executable)")
+                    print("\n3. If you don't see your terminal in the list:")
+                    print("   - Close this application")
+                    print("   - Run this command to reset permissions:")
+                    print("     tccutil reset Camera")
+                    print("   - Restart the application")
+                    print("\n4. Alternatively, run Python from an app bundle that has permissions")
+                    print("\n" + "="*70)
+                    return False
+                    
             if platform.system() == "Windows":
                 # Windows-specific capture methods
                 capture_methods = [
@@ -48,8 +70,19 @@ class VideoCapturer:
                         self.cap.release()
                     except Exception:
                         continue
+            elif platform.system() == "Darwin":
+                # macOS-specific capture with AVFoundation backend
+                # Try AVFoundation explicitly first
+                try:
+                    self.cap = cv2.VideoCapture(self.device_index, cv2.CAP_AVFOUNDATION)
+                    if not self.cap.isOpened():
+                        self.cap.release()
+                        # Fallback to default
+                        self.cap = cv2.VideoCapture(self.device_index)
+                except Exception:
+                    self.cap = cv2.VideoCapture(self.device_index)
             else:
-                # Unix-like systems (Linux/Mac) capture method
+                # Linux capture method
                 self.cap = cv2.VideoCapture(self.device_index)
 
             if not self.cap or not self.cap.isOpened():
@@ -92,3 +125,20 @@ class VideoCapturer:
     def set_frame_callback(self, callback: Callable[[np.ndarray], None]) -> None:
         """Set callback for frame processing"""
         self.frame_callback = callback
+
+    def _check_macos_camera_permission(self) -> bool:
+        """Check if camera permissions are granted on macOS"""
+        if platform.system() != "Darwin":
+            return True
+            
+        # Try to open camera briefly to check permission status
+        test_cap = cv2.VideoCapture(self.device_index, cv2.CAP_AVFOUNDATION)
+        
+        # Give it a moment to initialize
+        import time
+        time.sleep(0.5)
+        
+        is_opened = test_cap.isOpened()
+        test_cap.release()
+        
+        return is_opened
